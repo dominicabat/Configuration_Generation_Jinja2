@@ -1,0 +1,252 @@
+
+{% set mask_var = mask -%}
+{% set Alloc_IP_Prefix_var = Alloc_IP_block -%}
+{% set Recov_IP_Prefix_var = Recov_IP_block -%}
+{% set source_device_var = src_node -%}
+{% set dest_device_var = dst_node -%}
+{% set check_commands_var = check_commands -%}
+
+{% set i = 0 -%}
+
+{% if mask_var == 24 -%}
+{% set dotted_var = '255.255.255.0' -%}
+{% set stop = 1 -%}
+{% elif mask_var == 23 -%}
+{% set dotted_var = '255.255.254.0' -%}
+{% set stop = 2 %}
+{% elif mask_var == 22 %}
+{% set dotted_var = '255.255.248.0' -%}
+{% set stop = 4 -%}
+{% elif mask_var == 21 %}
+{% set dotted_var = '255.255.240.0' -%}
+{% set stop = 8 -%}
+{% endif -%}
+
+
+================================Implementation================================================
+{# ----------start of recovery---------- #}
+{% if method == 'transfer' or method == 'recover' or method == 'swap' -%}
+-----------------------------Removing IP Local pool-----------------------------
+
+***********************
+{{ source_device_var }}
+**********************
+
+conf t
+{% for IP_Prefix in Recov_IP_Prefix_var -%}
+{% set command ='no ip local pool DHCP_NAME ' -%}
+{% with y = command -%}
+{% for i in range(0, 255) if i<stop -%}
+{% set IP_split = IP_Prefix.split('.')[0:3] -%}
+{% set a = IP_split[0] | int -%}
+{% set b = IP_split[1] | int -%}
+{% set c = IP_split[2] | int -%}
+{% set combine_1 = [a,b,c+i,1] -%}
+{% set combine_254 = [a,b,c+i,254] -%}
+{{ y }}{{ combine_1 | join('.') }} {{ combine_254 | join('.') }}
+{% set i = i+1 -%}
+{% endfor -%}
+{% endwith -%}
+{% endfor -%}
+exit
+
+
+
+
+
+
+----------------------Removing network statement, static route, and Prefix_list-----------------------------
+
+***********************
+{{ source_device_var }}
+**********************
+
+conf t
+router bgp 1234
+ address-family ipv4 
+{%- for IP_Prefix in Recov_IP_Prefix_var %}
+  no network {{ IP_Prefix }} mask {{ dotted_var }} route-map ROUTE_MAP_NAME
+{%- endfor %}  
+  exit
+ exit
+{% for IP_Prefix in Recov_IP_Prefix_var-%}
+no ip route {{ IP_Prefix }} {{ dotted_var }} Null0
+{% set IP_split = IP_Prefix.split('.')[0:4] -%}
+{% set a = IP_split[0] | int -%}
+{% set b = IP_split[1] | int -%}
+{% set c = IP_split[2] | int -%}
+{% set d = IP_split[3] | int -%}
+{% set combine_seq = [a,b,c] -%}
+no ip prefix-list PREFIX_LIST_NAME seq {{ combine_seq | join() }} permit {{ IP_Prefix }}/{{ mask_var }} le 32
+{% endfor -%}
+exit
+wr
+
+
+{% endif -%}
+
+{# ----------end of recovery---------- #}
+
+{# ----------start of allocation---------- #}
+
+{%- if method == 'transfer' or method == 'allocate' or method == 'swap' -%}
+
+--------------Configuring Static Route, Prefix-list, network statement, and DHCP-----------------------
+
+***********************
+{{ dest_device_var }}
+**********************
+
+
+conf t
+{% for IP_Prefix in Alloc_IP_Prefix_var -%}
+ip route {{ IP_Prefix }} {{ dotted_var }} Null0
+{% set IP_split = IP_Prefix.split('.')[0:4] -%}
+{% set a = IP_split[0] | int -%}
+{% set b = IP_split[1] | int -%}
+{% set c = IP_split[2] | int -%}
+{% set d = IP_split[3] | int -%}
+{% set combine_seq = [a,b,c] -%}
+ip prefix-list PREFIX_LIST_NAME seq {{ combine_seq | join() }} permit {{ IP_Prefix }}/{{ mask_var }} le 32
+{% endfor -%}
+router bgp 1234
+ address-family ipv4
+{%- for IP_Prefix in Alloc_IP_Prefix_var %}
+  network {{ IP_Prefix }} mask {{ dotted_var }} route-map ROUTE_MAP_NAME
+{%- endfor %}
+  exit
+ exit
+{% for IP_Prefix in Alloc_IP_Prefix_var -%}
+{% set command ='ip local pool DHCP_NAME ' -%}
+{% with y =command -%}
+{% for i in range(0, 255) if i<stop -%}
+{% set IP_split = IP_Prefix.split('.')[0:3] -%}
+{% set a = IP_split[0] | int -%}
+{% set b = IP_split[1] | int -%}
+{% set c = IP_split[2] | int -%}
+{% set combine_1 = [a,b,c+i,1] -%}
+{% set combine_254 = [a,b,c+i,254] -%}
+{{ y }}{{ combine_1 | join('.') }} {{ combine_254 | join('.') }}
+{% set i = i+1 -%}
+{% endfor -%}
+{% endwith -%}
+{% endfor -%}
+exit
+wr
+
+
+
+
+
+
+
+
+{% endif -%}
+
+
+{# ----------end of allocation---------- #}
+
+
+
+
+
+
+################################################POSTCHECKS################################################
+
+{% if method == 'recover' -%}
+*********************
+{{ source_device_var }}
+*********************
+
+{% for IP_Prefix in Recov_IP_Prefix_var -%}
+{% for command in check_commands_var -%}
+{% for i in range(0, 255) if i<stop -%}
+{% set IP_split = IP_Prefix.split('.')[0:3] -%}
+{% set a = IP_split[0] | int -%}
+{% set b = IP_split[1] | int -%}
+{% set c = IP_split[2] | int -%}
+{% set combine = [a,b,c+i] -%}
+{{ command }}{{ combine | join('.') }}
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+
+{% for IP_Prefix in Recov_IP_Prefix_var %}
+sh ip route {{ IP_Prefix }} {{ dotted_var }}
+sh ip route {{ IP_Prefix }} {{ dotted_var }} longer 
+{%- endfor %}
+
+
+*****************
+Reference node 
+*****************
+{% for IP_Prefix in Recov_IP_Prefix_var %}
+sh route {{ IP_Prefix }}
+sh route longer {{ IP_Prefix }}/{{ mask_var }}
+sh bgp {{ IP_Prefix }}
+{% endfor %}
+
+
+*****************
+{%- for IP_Prefix in Recov_IP_Prefix_var%}
+{%- set IP_split = IP_Prefix.split('.')[0:3] %}
+{%- set a = IP_split[0] | int %}
+{%- set b = IP_split[1] | int %}
+{%- set c = IP_split[2] | int %}
+{%- set combine_1 = [a,b,c,1] %}
+tracert {{ combine_1 | join('.') }}
+{%- endfor %}
+*****************
+
+
+
+{% endif %}
+
+
+{% if method == 'allocate' or method == 'transfer' or method == 'swap' -%}
+*********************
+{{ dest_device_var }}
+*********************
+
+{% for IP_Prefix in Alloc_IP_Prefix_var -%}
+{% for command in check_commands_var -%}
+{% for i in range(0, 255) if i<stop -%}
+{% set IP_split = IP_Prefix.split('.')[0:3] -%}
+{% set a = IP_split[0] | int -%}
+{% set b = IP_split[1] | int -%}
+{% set c = IP_split[2] | int -%}
+{% set combine = [a,b,c+i] -%}
+{{ command }}{{ combine | join('.') }}
+{% endfor -%}
+{% endfor -%}
+{% endfor %}
+
+{% for IP_Prefix in Recov_IP_Prefix_var %}
+sh ip route {{ IP_Prefix }} {{ dotted_var }}
+sh ip route {{ IP_Prefix }} {{ dotted_var }} longer 
+{% endfor %}
+
+*****************
+reference node
+*****************
+{% for IP_Prefix in Alloc_IP_Prefix_var%}
+sh route {{ IP_Prefix }}
+sh route longer {{ IP_Prefix }}/{{ mask_var }}
+sh bgp {{ IP_Prefix }}
+{% endfor %}
+
+
+*****************
+{%- for IP_Prefix in Alloc_IP_Prefix_var%}
+{%- set IP_split = IP_Prefix.split('.')[0:3] %}
+{%- set a = IP_split[0] | int %}
+{%- set b = IP_split[1] | int %}
+{%- set c = IP_split[2] | int %}
+{%- set combine_1 = [a,b,c,1] %}
+tracert {{ combine_1 | join('.') }}
+{%- endfor %}
+*****************
+
+
+
+{% endif %}
